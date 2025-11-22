@@ -65,6 +65,16 @@ CREATE TABLE IF NOT EXISTS user_sessions (
     last_used TEXT DEFAULT (datetime('now'))
 );
 
+-- Password history (prevent password reuse)
+CREATE TABLE IF NOT EXISTS password_history (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_history_user ON password_history(user_id);
+
 -- =============================================================================
 -- PRODUCT MANAGEMENT
 -- =============================================================================

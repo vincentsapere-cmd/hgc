@@ -16,8 +16,33 @@ import { registerValidation, loginValidation, passwordResetValidation, passwordU
 import { ValidationError, AuthenticationError, NotFoundError, ConflictError } from '../middleware/errorHandler.js';
 import { logger, logSecurityEvent } from '../utils/logger.js';
 import { emailService } from '../services/email.js';
+import { changePassword as changePasswordService, addToPasswordHistory } from '../services/password.js';
 
 const router = express.Router();
+
+/**
+ * Constant-time string comparison to prevent timing attacks
+ */
+const safeCompare = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') {
+    return false;
+  }
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    // Still do comparison to maintain constant time
+    crypto.timingSafeEqual(Buffer.alloc(bufA.length), bufA);
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+};
+
+/**
+ * Hash a token for secure storage/comparison
+ */
+const hashToken = (token) => {
+  return crypto.createHash('sha256').update(token).digest('hex');
+};
 
 /**
  * POST /auth/register
@@ -338,14 +363,17 @@ router.post('/forgot-password', passwordResetValidation, async (req, res, next) 
 
     // Always return success (don't reveal if email exists)
     if (user) {
+      // Generate token and store its hash (more secure than storing raw token)
       const resetToken = crypto.randomBytes(32).toString('hex');
+      const resetTokenHash = hashToken(resetToken);
       const resetExpires = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour
 
       db.prepare(`
         UPDATE users SET password_reset_token = ?, password_reset_expires = ?
         WHERE id = ?
-      `).run(resetToken, resetExpires, user.id);
+      `).run(resetTokenHash, resetExpires, user.id);
 
+      // Send the raw token to user (they'll use it to verify)
       await emailService.sendPasswordReset(user, resetToken);
       logSecurityEvent('password_reset_requested', { userId: user.id, ip: req.ip });
     }
@@ -362,33 +390,55 @@ router.post('/forgot-password', passwordResetValidation, async (req, res, next) 
 
 /**
  * POST /auth/reset-password
- * Reset password with token
+ * Reset password with token (uses secure token comparison)
  */
 router.post('/reset-password', passwordUpdateValidation, async (req, res, next) => {
   try {
     const { token, password } = req.body;
     const db = getDatabase();
 
-    const user = db.prepare(`
-      SELECT id FROM users
-      WHERE password_reset_token = ? AND password_reset_expires > datetime('now')
-    `).get(token);
+    // Hash the incoming token to match against stored hash
+    const tokenHash = hashToken(token);
 
-    if (!user) {
+    // Get all users with non-expired reset tokens for constant-time comparison
+    // This prevents timing attacks that could reveal if a token exists
+    const users = db.prepare(`
+      SELECT id, password_reset_token FROM users
+      WHERE password_reset_expires > datetime('now') AND password_reset_token IS NOT NULL
+    `).all();
+
+    // Use constant-time comparison to find matching token
+    let matchedUser = null;
+    for (const user of users) {
+      if (safeCompare(user.password_reset_token, tokenHash)) {
+        matchedUser = user;
+        // Don't break early to maintain constant time
+      }
+    }
+
+    if (!matchedUser) {
+      // Add small random delay to further prevent timing attacks
+      await new Promise(resolve => setTimeout(resolve, Math.random() * 100));
       throw new ValidationError('Invalid or expired reset token');
     }
 
-    const passwordHash = await bcrypt.hash(password, config.security.bcryptRounds);
+    // Get current password hash to save to history
+    const currentUser = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(matchedUser.id);
+    if (currentUser) {
+      addToPasswordHistory(matchedUser.id, currentUser.password_hash);
+    }
+
+    const passwordHashNew = await bcrypt.hash(password, config.security.bcryptRounds);
 
     db.prepare(`
       UPDATE users SET password_hash = ?, password_reset_token = NULL, password_reset_expires = NULL
       WHERE id = ?
-    `).run(passwordHash, user.id);
+    `).run(passwordHashNew, matchedUser.id);
 
     // Invalidate all sessions
-    db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(user.id);
+    db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(matchedUser.id);
 
-    logSecurityEvent('password_reset_completed', { userId: user.id, ip: req.ip });
+    logSecurityEvent('password_reset_completed', { userId: matchedUser.id, ip: req.ip });
 
     res.json({
       success: true,
@@ -429,6 +479,40 @@ router.get('/me', authenticate, async (req, res, next) => {
         createdAt: user.created_at,
         lastLogin: user.last_login
       }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /auth/change-password
+ * Change password with history tracking
+ */
+router.post('/change-password', authenticate, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      throw new ValidationError('Current password and new password are required');
+    }
+
+    const result = await changePasswordService(req.user.id, currentPassword, newPassword);
+
+    if (!result.success) {
+      throw new ValidationError(result.error);
+    }
+
+    // Invalidate all other sessions (optional security measure)
+    const db = getDatabase();
+    db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(req.user.id);
+
+    logSecurityEvent('password_changed', { userId: req.user.id, ip: req.ip });
+
+    res.json({
+      success: true,
+      message: 'Password changed successfully. Please log in again with your new password.'
     });
 
   } catch (error) {

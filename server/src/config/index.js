@@ -17,16 +17,136 @@ dotenv.config({ path: path.join(__dirname, '../../.env') });
 // CONFIGURATION VALIDATION
 // =============================================================================
 
-const requiredEnvVars = [
-  'JWT_SECRET',
-  'SESSION_SECRET'
+/**
+ * Patterns that indicate a placeholder/default value that should be changed
+ */
+const INSECURE_PATTERNS = [
+  'REPLACE_WITH',
+  'change-in-production',
+  'change-me',
+  'your-secret',
+  'development-secret',
+  'development-session',
+  'secret-key-here',
+  'encryption-key-here'
 ];
 
-const validateConfig = () => {
-  const missing = requiredEnvVars.filter(key => !process.env[key]);
+/**
+ * Check if a value appears to be a placeholder
+ */
+const isPlaceholder = (value) => {
+  if (!value || typeof value !== 'string') return false;
+  const lower = value.toLowerCase();
+  return INSECURE_PATTERNS.some(pattern => lower.includes(pattern.toLowerCase()));
+};
 
-  if (missing.length > 0 && process.env.NODE_ENV === 'production') {
-    throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
+/**
+ * Comprehensive configuration validation
+ */
+const validateConfig = () => {
+  const errors = [];
+  const warnings = [];
+  const isProduction = process.env.NODE_ENV === 'production';
+  const isLivePayPal = process.env.PAYPAL_MODE === 'live';
+
+  // ==========================================================================
+  // CRITICAL SECURITY CHECKS (fail in production)
+  // ==========================================================================
+
+  // JWT Secret validation
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret) {
+    errors.push('JWT_SECRET is required');
+  } else if (jwtSecret.length < 64) {
+    errors.push('JWT_SECRET must be at least 64 characters for security');
+  } else if (isPlaceholder(jwtSecret)) {
+    errors.push('JWT_SECRET contains a default/placeholder value - must be changed');
+  }
+
+  // Session Secret validation
+  const sessionSecret = process.env.SESSION_SECRET;
+  if (!sessionSecret) {
+    errors.push('SESSION_SECRET is required');
+  } else if (sessionSecret.length < 32) {
+    errors.push('SESSION_SECRET must be at least 32 characters');
+  } else if (isPlaceholder(sessionSecret)) {
+    errors.push('SESSION_SECRET contains a default/placeholder value - must be changed');
+  }
+
+  // Encryption key validation (if using encryption features)
+  const encryptionKey = process.env.ENCRYPTION_KEY;
+  if (encryptionKey && (encryptionKey.length !== 32 || isPlaceholder(encryptionKey))) {
+    warnings.push('ENCRYPTION_KEY should be exactly 32 characters and not a placeholder');
+  }
+
+  // ==========================================================================
+  // PAYPAL CONFIGURATION CHECKS
+  // ==========================================================================
+
+  if (isLivePayPal) {
+    // In live mode, validate live credentials
+    const liveClientId = process.env.PAYPAL_LIVE_CLIENT_ID;
+    const liveClientSecret = process.env.PAYPAL_LIVE_CLIENT_SECRET;
+
+    if (!liveClientId || isPlaceholder(liveClientId)) {
+      errors.push('PAYPAL_LIVE_CLIENT_ID is required for live PayPal mode');
+    }
+    if (!liveClientSecret || isPlaceholder(liveClientSecret)) {
+      errors.push('PAYPAL_LIVE_CLIENT_SECRET is required for live PayPal mode');
+    }
+    if (!process.env.PAYPAL_WEBHOOK_ID) {
+      warnings.push('PAYPAL_WEBHOOK_ID is recommended for production webhook verification');
+    }
+  }
+
+  // Production should not use sandbox mode
+  if (isProduction && process.env.PAYPAL_MODE === 'sandbox') {
+    warnings.push('PayPal is in sandbox mode but NODE_ENV is production');
+  }
+
+  // ==========================================================================
+  // DATABASE CHECKS
+  // ==========================================================================
+
+  if (isProduction) {
+    const dbPassword = process.env.DATABASE_PASSWORD;
+    if (!dbPassword || dbPassword.length < 8) {
+      warnings.push('DATABASE_PASSWORD should be set and at least 8 characters in production');
+    }
+  }
+
+  // ==========================================================================
+  // OUTPUT RESULTS
+  // ==========================================================================
+
+  // Always log warnings
+  if (warnings.length > 0) {
+    console.warn('\n⚠️  Configuration Warnings:');
+    warnings.forEach(w => console.warn(`   - ${w}`));
+    console.warn('');
+  }
+
+  // In production, fail on errors
+  if (errors.length > 0) {
+    console.error('\n❌ Configuration Errors:');
+    errors.forEach(e => console.error(`   - ${e}`));
+    console.error('');
+
+    if (isProduction) {
+      throw new Error(
+        `FATAL: ${errors.length} configuration error(s) detected. ` +
+        `Server cannot start in production with insecure configuration. ` +
+        `Errors: ${errors.join('; ')}`
+      );
+    } else {
+      console.warn('⚠️  Running in development mode with insecure configuration.');
+      console.warn('   These errors would prevent startup in production.\n');
+    }
+  }
+
+  // Success message
+  if (errors.length === 0 && warnings.length === 0) {
+    console.log('✅ Configuration validation passed\n');
   }
 };
 

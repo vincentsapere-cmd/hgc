@@ -12,6 +12,34 @@ import { logAuditEvent } from '../../utils/logger.js';
 const router = express.Router();
 
 /**
+ * Allowed sort columns - strict whitelist to prevent SQL injection
+ */
+const ALLOWED_SORT_COLUMNS = {
+  'name': 'p.name',
+  'price': 'p.price',
+  'stock_quantity': 'p.stock_quantity',
+  'created_at': 'p.created_at',
+  'updated_at': 'p.updated_at',
+  'sku': 'p.sku',
+  'is_active': 'p.is_active',
+  'is_featured': 'p.is_featured'
+};
+
+/**
+ * Safely get sort column from whitelist
+ */
+const getSafeSort = (sort) => {
+  return ALLOWED_SORT_COLUMNS[sort] || ALLOWED_SORT_COLUMNS['created_at'];
+};
+
+/**
+ * Safely get sort direction
+ */
+const getSafeOrder = (order) => {
+  return order?.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+};
+
+/**
  * GET /admin/products
  * List all products with admin details
  */
@@ -20,6 +48,11 @@ router.get('/', async (req, res, next) => {
     const { page = 1, limit = 20, search, category, status, sort = 'created_at', order = 'desc' } = req.query;
     const offset = (page - 1) * limit;
     const db = getDatabase();
+
+    // Validate pagination params
+    const safePage = Math.max(1, parseInt(page, 10) || 1);
+    const safeLimit = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const safeOffset = (safePage - 1) * safeLimit;
 
     let whereConditions = [];
     const params = [];
@@ -44,6 +77,10 @@ router.get('/', async (req, res, next) => {
 
     const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
+    // Use safe sort column and direction from whitelist
+    const safeSort = getSafeSort(sort);
+    const safeOrder = getSafeOrder(order);
+
     const total = db.prepare(`SELECT COUNT(*) as count FROM products p ${whereClause}`).get(...params).count;
 
     const products = db.prepare(`
@@ -51,9 +88,9 @@ router.get('/', async (req, res, next) => {
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
       ${whereClause}
-      ORDER BY p.${sort === 'name' || sort === 'price' || sort === 'stock_quantity' ? sort : 'created_at'} ${order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC'}
+      ORDER BY ${safeSort} ${safeOrder}
       LIMIT ? OFFSET ?
-    `).all(...params, limit, offset);
+    `).all(...params, safeLimit, safeOffset);
 
     res.json({
       success: true,
@@ -79,7 +116,7 @@ router.get('/', async (req, res, next) => {
         createdAt: p.created_at,
         updatedAt: p.updated_at
       })),
-      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / limit) }
+      pagination: { page: safePage, limit: safeLimit, total, pages: Math.ceil(total / safeLimit) }
     });
 
   } catch (error) {
