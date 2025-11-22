@@ -7,8 +7,34 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet">
     <script src="https://kit.fontawesome.com/a076d05399.js" crossorigin="anonymous"></script>
-    <!-- PayPal SDK - Replace 'sb' with your actual Client ID for production -->
-    <script src="https://www.paypal.com/sdk/js?client-id=sb&currency=USD&intent=capture"></script>
+    <!-- PayPal SDK - Loaded dynamically with client ID from backend -->
+    <script>
+      // Load PayPal SDK dynamically with client ID from backend API
+      (async function loadPayPalSDK() {
+        try {
+          const response = await fetch('/api/v1/payments/config');
+          const data = await response.json();
+          if (data.success && data.data?.paypal?.clientId) {
+            const script = document.createElement('script');
+            script.src = `https://www.paypal.com/sdk/js?client-id=${data.data.paypal.clientId}&currency=USD&intent=capture`;
+            script.async = true;
+            document.head.appendChild(script);
+          } else {
+            console.warn('PayPal config not available, using sandbox mode');
+            const script = document.createElement('script');
+            script.src = 'https://www.paypal.com/sdk/js?client-id=sb&currency=USD&intent=capture';
+            script.async = true;
+            document.head.appendChild(script);
+          }
+        } catch (err) {
+          console.warn('Failed to load PayPal config, using sandbox mode:', err);
+          const script = document.createElement('script');
+          script.src = 'https://www.paypal.com/sdk/js?client-id=sb&currency=USD&intent=capture';
+          script.async = true;
+          document.head.appendChild(script);
+        }
+      })();
+    </script>
     <style>
       body {
         font-family: 'Open Sans', sans-serif;
