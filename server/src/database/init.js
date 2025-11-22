@@ -17,7 +17,8 @@ let db = null;
 let dbType = config.database.type;
 
 /**
- * Database wrapper for consistent API across MySQL and SQLite
+ * Database wrapper for consistent ASYNC API across MySQL and SQLite
+ * All methods return Promises for consistent behavior
  */
 class DatabaseWrapper {
   constructor(connection, type) {
@@ -26,28 +27,31 @@ class DatabaseWrapper {
   }
 
   /**
-   * Prepare and run a query - returns the result for SELECT, or run info for INSERT/UPDATE/DELETE
+   * Prepare and run a query - ALL methods return Promises for consistency
    */
   prepare(sql) {
     const self = this;
     return {
       get: async (...params) => {
         if (self.type === 'sqlite') {
-          return self.connection.prepare(sql).get(...params);
+          // Wrap SQLite sync call in Promise for consistent async behavior
+          return Promise.resolve(self.connection.prepare(sql).get(...params));
         }
         const [rows] = await self.connection.execute(self.convertPlaceholders(sql), params);
         return rows[0] || null;
       },
       all: async (...params) => {
         if (self.type === 'sqlite') {
-          return self.connection.prepare(sql).all(...params);
+          // Wrap SQLite sync call in Promise for consistent async behavior
+          return Promise.resolve(self.connection.prepare(sql).all(...params));
         }
         const [rows] = await self.connection.execute(self.convertPlaceholders(sql), params);
         return rows;
       },
       run: async (...params) => {
         if (self.type === 'sqlite') {
-          return self.connection.prepare(sql).run(...params);
+          // Wrap SQLite sync call in Promise for consistent async behavior
+          return Promise.resolve(self.connection.prepare(sql).run(...params));
         }
         const [result] = await self.connection.execute(self.convertPlaceholders(sql), params);
         return { changes: result.affectedRows, lastInsertRowid: result.insertId };

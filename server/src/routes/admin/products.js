@@ -81,9 +81,10 @@ router.get('/', async (req, res, next) => {
     const safeSort = getSafeSort(sort);
     const safeOrder = getSafeOrder(order);
 
-    const total = db.prepare(`SELECT COUNT(*) as count FROM products p ${whereClause}`).get(...params).count;
+    const totalResult = await db.prepare(`SELECT COUNT(*) as count FROM products p ${whereClause}`).get(...params);
+    const total = totalResult.count;
 
-    const products = db.prepare(`
+    const products = await db.prepare(`
       SELECT p.*, c.name as category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
@@ -133,11 +134,11 @@ router.get('/:id', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+    const product = await db.prepare('SELECT * FROM products WHERE id = ?').get(id);
     if (!product) throw new NotFoundError('Product not found');
 
-    const variations = db.prepare('SELECT * FROM product_variations WHERE product_id = ? ORDER BY sort_order').all(id);
-    const reviews = db.prepare(`
+    const variations = await db.prepare('SELECT * FROM product_variations WHERE product_id = ? ORDER BY sort_order').all(id);
+    const reviews = await db.prepare(`
       SELECT r.*, u.first_name, u.last_name, u.email
       FROM product_reviews r
       JOIN users u ON r.user_id = u.id
@@ -197,15 +198,15 @@ router.post('/', createProductValidation, async (req, res, next) => {
     } = req.body;
 
     // Check SKU uniqueness
-    const existingSku = db.prepare('SELECT id FROM products WHERE sku = ?').get(sku);
+    const existingSku = await db.prepare('SELECT id FROM products WHERE sku = ?').get(sku);
     if (existingSku) throw new ConflictError('SKU already exists');
 
     // Generate slug
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const existingSlug = db.prepare('SELECT id FROM products WHERE slug = ?').get(slug);
+    const existingSlug = await db.prepare('SELECT id FROM products WHERE slug = ?').get(slug);
     const finalSlug = existingSlug ? `${slug}-${Date.now()}` : slug;
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO products (id, sku, name, slug, description, short_description, category_id, price,
         compare_at_price, cost_price, mg, unit, weight, weight_unit, image_url, images,
         has_variations, is_featured, is_taxable, requires_shipping, stock_quantity,
@@ -227,10 +228,11 @@ router.post('/', createProductValidation, async (req, res, next) => {
         INSERT INTO product_variations (id, product_id, name, sku, price_modifier, stock_quantity, image_url, sort_order)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      variations.forEach((v, i) => {
-        variationInsert.run(uuidv4(), productId, v.name, v.sku || `${sku}-${v.name.toUpperCase().replace(/\s+/g, '-')}`,
+      for (let i = 0; i < variations.length; i++) {
+        const v = variations[i];
+        await variationInsert.run(uuidv4(), productId, v.name, v.sku || `${sku}-${v.name.toUpperCase().replace(/\s+/g, '-')}`,
           v.priceModifier || 0, v.stockQuantity || 0, v.imageUrl || null, i);
-      });
+      }
     }
 
     logAuditEvent(req.user.id, 'product_created', 'product', productId, { name, sku }, req.ip);
@@ -255,7 +257,7 @@ router.put('/:id', updateProductValidation, async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(id);
+    const existing = await db.prepare('SELECT * FROM products WHERE id = ?').get(id);
     if (!existing) throw new NotFoundError('Product not found');
 
     const updates = req.body;
@@ -293,20 +295,21 @@ router.put('/:id', updateProductValidation, async (req, res, next) => {
     if (fields.length) {
       fields.push('updated_at = datetime(\'now\')');
       values.push(id);
-      db.prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+      await db.prepare(`UPDATE products SET ${fields.join(', ')} WHERE id = ?`).run(...values);
     }
 
     // Update variations
     if (updates.variations) {
-      db.prepare('DELETE FROM product_variations WHERE product_id = ?').run(id);
+      await db.prepare('DELETE FROM product_variations WHERE product_id = ?').run(id);
       const variationInsert = db.prepare(`
         INSERT INTO product_variations (id, product_id, name, sku, price_modifier, stock_quantity, image_url, is_active, sort_order)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      updates.variations.forEach((v, i) => {
-        variationInsert.run(v.id || uuidv4(), id, v.name, v.sku, v.priceModifier || 0,
+      for (let i = 0; i < updates.variations.length; i++) {
+        const v = updates.variations[i];
+        await variationInsert.run(v.id || uuidv4(), id, v.name, v.sku, v.priceModifier || 0,
           v.stockQuantity || 0, v.imageUrl || null, v.isActive !== false ? 1 : 0, i);
-      });
+      }
     }
 
     logAuditEvent(req.user.id, 'product_updated', 'product', id, updates, req.ip);
@@ -327,7 +330,7 @@ router.delete('/:id', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const result = db.prepare('UPDATE products SET is_active = 0, updated_at = datetime(\'now\') WHERE id = ?').run(id);
+    const result = await db.prepare('UPDATE products SET is_active = 0, updated_at = datetime(\'now\') WHERE id = ?').run(id);
     if (result.changes === 0) throw new NotFoundError('Product not found');
 
     logAuditEvent(req.user.id, 'product_deleted', 'product', id, {}, req.ip);
@@ -349,15 +352,15 @@ router.post('/:id/inventory', async (req, res, next) => {
     const { adjustment, reason, variationId } = req.body;
     const db = getDatabase();
 
-    const product = db.prepare('SELECT stock_quantity FROM products WHERE id = ?').get(id);
+    const product = await db.prepare('SELECT stock_quantity FROM products WHERE id = ?').get(id);
     if (!product) throw new NotFoundError('Product not found');
 
     const newQuantity = product.stock_quantity + adjustment;
     if (newQuantity < 0) throw new ValidationError('Cannot reduce stock below 0');
 
-    db.prepare('UPDATE products SET stock_quantity = ?, updated_at = datetime(\'now\') WHERE id = ?').run(newQuantity, id);
+    await db.prepare('UPDATE products SET stock_quantity = ?, updated_at = datetime(\'now\') WHERE id = ?').run(newQuantity, id);
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO inventory_transactions (id, product_id, variation_id, type, quantity, previous_quantity, new_quantity, notes, created_by)
       VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?, ?)
     `).run(uuidv4(), id, variationId || null, adjustment, product.stock_quantity, newQuantity, reason || null, req.user.id);
@@ -378,7 +381,7 @@ router.post('/:id/inventory', async (req, res, next) => {
 router.get('/categories/all', async (req, res, next) => {
   try {
     const db = getDatabase();
-    const categories = db.prepare('SELECT * FROM categories ORDER BY sort_order, name').all();
+    const categories = await db.prepare('SELECT * FROM categories ORDER BY sort_order, name').all();
 
     res.json({
       success: true,

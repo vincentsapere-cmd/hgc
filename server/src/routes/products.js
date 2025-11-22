@@ -75,7 +75,7 @@ router.get('/', paginationValidation, optionalAuth, async (req, res, next) => {
       LEFT JOIN categories c ON p.category_id = c.id
       ${whereClause}
     `;
-    const { total } = db.prepare(countQuery).get(...params);
+    const { total } = await db.prepare(countQuery).get(...params);
 
     // Get products
     const query = `
@@ -92,14 +92,14 @@ router.get('/', paginationValidation, optionalAuth, async (req, res, next) => {
       LIMIT ? OFFSET ?
     `;
 
-    const products = db.prepare(query).all(...params, limit, offset);
+    const products = await db.prepare(query).all(...params, limit, offset);
 
     // Get variations for products that have them
     const productIds = products.filter(p => p.has_variations).map(p => p.id);
     let variationsMap = {};
 
     if (productIds.length > 0) {
-      const variations = db.prepare(`
+      const variations = await db.prepare(`
         SELECT id, product_id, name, sku, price_modifier, stock_quantity, image_url
         FROM product_variations
         WHERE product_id IN (${productIds.map(() => '?').join(',')}) AND is_active = 1
@@ -209,7 +209,7 @@ router.get('/featured', async (req, res, next) => {
     const db = getDatabase();
     const limit = parseInt(req.query.limit) || 8;
 
-    const products = db.prepare(`
+    const products = await db.prepare(`
       SELECT
         p.id, p.sku, p.name, p.slug, p.price, p.compare_at_price,
         p.mg, p.unit, p.image_url, p.has_variations,
@@ -251,7 +251,7 @@ router.get('/categories', async (req, res, next) => {
   try {
     const db = getDatabase();
 
-    const categories = db.prepare(`
+    const categories = await db.prepare(`
       SELECT c.id, c.name, c.slug, c.description, c.image_url,
         COUNT(p.id) as product_count
       FROM categories c
@@ -287,7 +287,7 @@ router.get('/:idOrSlug', optionalAuth, async (req, res, next) => {
     const { idOrSlug } = req.params;
     const db = getDatabase();
 
-    const product = db.prepare(`
+    const product = await db.prepare(`
       SELECT
         p.*, c.id as category_id, c.name as category_name, c.slug as category_slug
       FROM products p
@@ -300,7 +300,7 @@ router.get('/:idOrSlug', optionalAuth, async (req, res, next) => {
     }
 
     // Get variations
-    const variations = db.prepare(`
+    const variations = await db.prepare(`
       SELECT id, name, sku, price_modifier, stock_quantity, image_url
       FROM product_variations
       WHERE product_id = ? AND is_active = 1
@@ -308,7 +308,7 @@ router.get('/:idOrSlug', optionalAuth, async (req, res, next) => {
     `).all(product.id);
 
     // Get reviews
-    const reviews = db.prepare(`
+    const reviews = await db.prepare(`
       SELECT r.id, r.rating, r.title, r.content, r.is_verified_purchase,
         r.helpful_count, r.created_at, u.first_name
       FROM product_reviews r
@@ -319,7 +319,7 @@ router.get('/:idOrSlug', optionalAuth, async (req, res, next) => {
     `).all(product.id);
 
     // Calculate average rating
-    const ratingStats = db.prepare(`
+    const ratingStats = await db.prepare(`
       SELECT AVG(rating) as average, COUNT(*) as count
       FROM product_reviews
       WHERE product_id = ? AND is_approved = 1
@@ -327,7 +327,7 @@ router.get('/:idOrSlug', optionalAuth, async (req, res, next) => {
 
     // Track view (if user logged in)
     if (req.user) {
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO product_performance (id, product_id, date, views)
         VALUES (?, ?, date('now'), 1)
         ON CONFLICT(product_id, date) DO UPDATE SET views = views + 1

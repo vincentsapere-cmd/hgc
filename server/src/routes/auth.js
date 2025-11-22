@@ -54,7 +54,7 @@ router.post('/register', registerValidation, async (req, res, next) => {
     const db = getDatabase();
 
     // Check if email exists
-    const existingUser = db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase());
+    const existingUser = await db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase());
     if (existingUser) {
       throw new ConflictError('An account with this email already exists');
     }
@@ -265,7 +265,7 @@ router.post('/logout', authenticate, async (req, res, next) => {
     const db = getDatabase();
 
     // Delete all sessions for user (or just current one)
-    db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(req.user.id);
+    await db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(req.user.id);
 
     // Clear cookies
     res.clearCookie('accessToken');
@@ -423,7 +423,7 @@ router.post('/reset-password', passwordUpdateValidation, async (req, res, next) 
     }
 
     // Get current password hash to save to history
-    const currentUser = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(matchedUser.id);
+    const currentUser = await db.prepare('SELECT password_hash FROM users WHERE id = ?').get(matchedUser.id);
     if (currentUser) {
       addToPasswordHistory(matchedUser.id, currentUser.password_hash);
     }
@@ -506,7 +506,7 @@ router.post('/change-password', authenticate, async (req, res, next) => {
 
     // Invalidate all other sessions (optional security measure)
     const db = getDatabase();
-    db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(req.user.id);
+    await db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(req.user.id);
 
     logSecurityEvent('password_changed', { userId: req.user.id, ip: req.ip });
 

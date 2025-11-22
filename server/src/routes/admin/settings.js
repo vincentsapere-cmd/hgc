@@ -21,7 +21,7 @@ const router = express.Router();
 router.get('/', async (req, res, next) => {
   try {
     const db = getDatabase();
-    const settings = db.prepare('SELECT * FROM settings ORDER BY category, key').all();
+    const settings = await db.prepare('SELECT * FROM settings ORDER BY category, key').all();
 
     const grouped = settings.reduce((acc, s) => {
       if (!acc[s.category]) acc[s.category] = {};
@@ -59,13 +59,13 @@ router.put('/', requireSuperAdmin, async (req, res, next) => {
     `);
 
     for (const [key, data] of Object.entries(settings)) {
-      const existing = db.prepare('SELECT id FROM settings WHERE key = ?').get(key);
+      const existing = await db.prepare('SELECT id FROM settings WHERE key = ?').get(key);
       const value = typeof data.value === 'object' ? JSON.stringify(data.value) : String(data.value);
 
       if (existing) {
-        updateSetting.run(value, req.user.id, key);
+        await updateSetting.run(value, req.user.id, key);
       } else {
-        insertSetting.run(uuidv4(), key, value, data.type || 'string', data.category || 'general', data.isPublic ? 1 : 0, req.user.id);
+        await insertSetting.run(uuidv4(), key, value, data.type || 'string', data.category || 'general', data.isPublic ? 1 : 0, req.user.id);
       }
     }
 
@@ -85,7 +85,7 @@ router.put('/', requireSuperAdmin, async (req, res, next) => {
 router.get('/tax-rates', async (req, res, next) => {
   try {
     const db = getDatabase();
-    const rates = db.prepare('SELECT * FROM tax_rates ORDER BY country, state, city').all();
+    const rates = await db.prepare('SELECT * FROM tax_rates ORDER BY country, state, city').all();
 
     res.json({
       success: true,
@@ -117,7 +117,7 @@ router.post('/tax-rates', async (req, res, next) => {
     const db = getDatabase();
 
     const rateId = uuidv4();
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO tax_rates (id, country, state, city, zip_code, rate, name, priority)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(rateId, country || 'US', state, city || null, zipCode || null, rate, name || null, priority || 0);
@@ -141,10 +141,10 @@ router.put('/tax-rates/:id', async (req, res, next) => {
     const { rate, name, isActive } = req.body;
     const db = getDatabase();
 
-    const existing = db.prepare('SELECT id FROM tax_rates WHERE id = ?').get(id);
+    const existing = await db.prepare('SELECT id FROM tax_rates WHERE id = ?').get(id);
     if (!existing) throw new NotFoundError('Tax rate not found');
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE tax_rates SET rate = ?, name = ?, is_active = ?, updated_at = datetime('now') WHERE id = ?
     `).run(rate, name, isActive ? 1 : 0, id);
 
@@ -166,7 +166,7 @@ router.delete('/tax-rates/:id', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    db.prepare('DELETE FROM tax_rates WHERE id = ?').run(id);
+    await db.prepare('DELETE FROM tax_rates WHERE id = ?').run(id);
 
     res.json({ success: true, message: 'Tax rate deleted' });
 
@@ -182,13 +182,13 @@ router.delete('/tax-rates/:id', async (req, res, next) => {
 router.get('/shipping-zones', async (req, res, next) => {
   try {
     const db = getDatabase();
-    const zones = db.prepare('SELECT * FROM shipping_zones ORDER BY name').all();
+    const zones = await db.prepare('SELECT * FROM shipping_zones ORDER BY name').all();
 
     const zoneIds = zones.map(z => z.id);
     let methodsMap = {};
 
     if (zoneIds.length) {
-      const methods = db.prepare(`
+      const methods = await db.prepare(`
         SELECT * FROM shipping_methods WHERE zone_id IN (${zoneIds.map(() => '?').join(',')}) OR zone_id IS NULL
         ORDER BY sort_order
       `).all(...zoneIds);
@@ -239,7 +239,7 @@ router.post('/shipping-zones', async (req, res, next) => {
     const db = getDatabase();
 
     const zoneId = uuidv4();
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO shipping_zones (id, name, countries, states, zip_codes)
       VALUES (?, ?, ?, ?, ?)
     `).run(zoneId, name, JSON.stringify(countries || []), JSON.stringify(states || []), JSON.stringify(zipCodes || []));
@@ -263,7 +263,7 @@ router.post('/shipping-methods', async (req, res, next) => {
     const db = getDatabase();
 
     const methodId = uuidv4();
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO shipping_methods (id, zone_id, name, description, type, cost, free_shipping_threshold,
         min_order_amount, max_order_amount, estimated_days_min, estimated_days_max)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -339,9 +339,10 @@ router.get('/audit-log', requireSuperAdmin, async (req, res, next) => {
 
     const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-    const total = db.prepare(`SELECT COUNT(*) as count FROM admin_audit_log a ${whereClause}`).get(...params).count;
+    const totalResult = await db.prepare(`SELECT COUNT(*) as count FROM admin_audit_log a ${whereClause}`).get(...params);
+    const total = totalResult.count;
 
-    const logs = db.prepare(`
+    const logs = await db.prepare(`
       SELECT a.*, u.email, u.first_name, u.last_name
       FROM admin_audit_log a
       JOIN users u ON a.user_id = u.id
