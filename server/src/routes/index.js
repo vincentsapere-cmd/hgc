@@ -10,6 +10,7 @@ import orderRoutes from './orders.js';
 import paymentRoutes from './payments.js';
 import cartRoutes from './cart.js';
 import userRoutes from './users.js';
+import giftCardRoutes from './giftcards.js';
 import adminRoutes from './admin/index.js';
 import webhookRoutes from './webhooks.js';
 import settingsRoutes from './settings.js';
@@ -21,6 +22,7 @@ router.use('/auth', authRoutes);
 router.use('/products', productRoutes);
 router.use('/cart', cartRoutes);
 router.use('/settings', settingsRoutes);
+router.use('/gift-cards', giftCardRoutes);
 
 // Protected routes
 router.use('/orders', orderRoutes);

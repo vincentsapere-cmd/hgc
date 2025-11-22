@@ -18,6 +18,81 @@ const router = express.Router();
 router.use(authenticate);
 
 /**
+ * GET /users/profile
+ * Get current user profile
+ */
+router.get('/profile', async (req, res, next) => {
+  try {
+    const db = getDatabase();
+
+    const user = await db.prepare(`
+      SELECT id, email, first_name, last_name, phone, role, status,
+        email_verified, two_factor_enabled, must_change_password, created_at, last_login
+      FROM users WHERE id = ?
+    `).get(req.user.id);
+
+    if (!user) {
+      throw new NotFoundError('User not found');
+    }
+
+    // Get addresses
+    const addresses = await db.prepare(`
+      SELECT * FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC
+    `).all(req.user.id);
+
+    // Get order stats
+    const orderStats = await db.prepare(`
+      SELECT COUNT(*) as total_orders, COALESCE(SUM(grand_total), 0) as total_spent
+      FROM orders WHERE user_id = ? AND payment_status = 'paid'
+    `).get(req.user.id);
+
+    // Get wishlist count
+    const wishlistCount = await db.prepare('SELECT COUNT(*) as count FROM wishlists WHERE user_id = ?').get(req.user.id);
+
+    res.json({
+      success: true,
+      data: {
+        id: user.id,
+        email: user.email,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        phone: user.phone,
+        role: user.role,
+        status: user.status,
+        emailVerified: !!user.email_verified,
+        twoFactorEnabled: !!user.two_factor_enabled,
+        mustChangePassword: !!user.must_change_password,
+        createdAt: user.created_at,
+        lastLogin: user.last_login,
+        addresses: addresses.map(a => ({
+          id: a.id,
+          label: a.label,
+          firstName: a.first_name,
+          lastName: a.last_name,
+          streetAddress: a.street_address,
+          streetAddress2: a.street_address_2,
+          city: a.city,
+          state: a.state,
+          zipCode: a.zip_code,
+          country: a.country,
+          phone: a.phone,
+          isDefault: !!a.is_default,
+          isBilling: !!a.is_billing
+        })),
+        stats: {
+          totalOrders: orderStats?.total_orders || 0,
+          totalSpent: parseFloat(orderStats?.total_spent || 0),
+          wishlistItems: wishlistCount?.count || 0
+        }
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * PUT /users/profile
  * Update user profile
  */

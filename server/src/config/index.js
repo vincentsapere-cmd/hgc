@@ -48,15 +48,16 @@ export const config = {
 
   // Database
   database: {
-    type: process.env.DATABASE_TYPE || 'sqlite',
+    type: process.env.DATABASE_TYPE || 'mysql',
     path: process.env.DATABASE_PATH || path.join(__dirname, '../../data/hgc_enterprise.db'),
-    // PostgreSQL options
+    // MySQL/PostgreSQL options
     host: process.env.DATABASE_HOST || 'localhost',
-    port: parseInt(process.env.DATABASE_PORT, 10) || 5432,
+    port: parseInt(process.env.DATABASE_PORT, 10) || 3306,
     name: process.env.DATABASE_NAME || 'hgc_enterprise',
-    user: process.env.DATABASE_USER || 'postgres',
+    user: process.env.DATABASE_USER || 'root',
     password: process.env.DATABASE_PASSWORD || '',
-    ssl: process.env.DATABASE_SSL === 'true'
+    ssl: process.env.DATABASE_SSL === 'true',
+    connectionLimit: parseInt(process.env.DATABASE_POOL_SIZE, 10) || 10
   },
 
   // Security

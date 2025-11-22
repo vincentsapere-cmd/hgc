@@ -13,6 +13,7 @@ import { paypalService } from '../services/paypal.js';
 import { emailService } from '../services/email.js';
 import { logger, logSecurityEvent } from '../utils/logger.js';
 import { config } from '../config/index.js';
+import { createGiftCardFromOrder } from './giftcards.js';
 
 const router = express.Router();
 
@@ -178,28 +179,45 @@ router.post('/paypal/capture', optionalAuth, paypalCaptureValidation, async (req
       }
     }
 
-    // Update inventory
-    const orderItems = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id);
-    for (const item of orderItems) {
-      db.prepare(`
-        UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND track_inventory = 1
-      `).run(item.quantity, item.product_id);
+    // Update inventory and create gift cards
+    const orderItems = await db.prepare('SELECT oi.*, p.is_gift_card, p.track_inventory FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = ?').all(order.id);
+    const createdGiftCards = [];
 
-      if (item.variation_id) {
-        db.prepare(`
-          UPDATE product_variations SET stock_quantity = stock_quantity - ? WHERE id = ?
-        `).run(item.quantity, item.variation_id);
+    for (const item of orderItems) {
+      // Create gift cards for gift card products
+      if (item.is_gift_card) {
+        for (let i = 0; i < item.quantity; i++) {
+          try {
+            const giftCard = await createGiftCardFromOrder(item, order, req.user?.id);
+            createdGiftCards.push(giftCard);
+          } catch (gcError) {
+            logger.error('Failed to create gift card', { error: gcError.message, itemId: item.id });
+          }
+        }
       }
 
-      // Record inventory transaction
-      const product = db.prepare('SELECT stock_quantity FROM products WHERE id = ?').get(item.product_id);
-      db.prepare(`
-        INSERT INTO inventory_transactions (id, product_id, variation_id, type, quantity, previous_quantity, new_quantity, reference_type, reference_id)
-        VALUES (?, ?, ?, 'sale', ?, ?, ?, 'order', ?)
-      `).run(
-        uuidv4(), item.product_id, item.variation_id, -item.quantity,
-        (product?.stock_quantity || 0) + item.quantity, product?.stock_quantity || 0, order.id
-      );
+      // Update inventory for non-gift-card items
+      if (item.track_inventory) {
+        await db.prepare(`
+          UPDATE products SET stock_quantity = stock_quantity - ? WHERE id = ? AND track_inventory = 1
+        `).run(item.quantity, item.product_id);
+
+        if (item.variation_id) {
+          await db.prepare(`
+            UPDATE product_variations SET stock_quantity = stock_quantity - ? WHERE id = ?
+          `).run(item.quantity, item.variation_id);
+        }
+
+        // Record inventory transaction
+        const product = await db.prepare('SELECT stock_quantity FROM products WHERE id = ?').get(item.product_id);
+        await db.prepare(`
+          INSERT INTO inventory_transactions (id, product_id, variation_id, type, quantity, previous_quantity, new_quantity, reference_type, reference_id)
+          VALUES (?, ?, ?, 'sale', ?, ?, ?, 'order', ?)
+        `).run(
+          uuidv4(), item.product_id, item.variation_id, -item.quantity,
+          (product?.stock_quantity || 0) + item.quantity, product?.stock_quantity || 0, order.id
+        );
+      }
     }
 
     // Log status change

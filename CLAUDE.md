@@ -2,7 +2,9 @@
 
 ## Project Overview
 
-Enterprise-grade e-commerce application with full PayPal SDK integration, SQLite database, and comprehensive admin suite. Frontend and backend are fully integrated with real-time API communication.
+Enterprise-grade e-commerce application with full PayPal SDK integration, MySQL database, and comprehensive admin suite. Frontend and backend are fully integrated with real-time API communication.
+
+**Production URL:** https://homegrowncreations.thepfps.xyz
 
 ## Architecture
 

@@ -157,6 +157,50 @@ router.get('/', paginationValidation, optionalAuth, async (req, res, next) => {
 });
 
 /**
+ * GET /products/search
+ * Quick search endpoint with autocomplete support
+ */
+router.get('/search', async (req, res, next) => {
+  try {
+    const { q, limit = 10 } = req.query;
+    const db = getDatabase();
+
+    if (!q || q.length < 2) {
+      return res.json({ success: true, data: [] });
+    }
+
+    const searchTerm = `%${q}%`;
+
+    const products = await db.prepare(`
+      SELECT p.id, p.name, p.slug, p.price, p.mg, p.image_url, c.name as category_name
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.is_active = 1 AND (p.name LIKE ? OR p.sku LIKE ? OR p.description LIKE ?)
+      ORDER BY
+        CASE WHEN p.name LIKE ? THEN 1 ELSE 2 END,
+        p.name
+      LIMIT ?
+    `).all(searchTerm, searchTerm, searchTerm, `${q}%`, parseInt(limit));
+
+    res.json({
+      success: true,
+      data: products.map(p => ({
+        id: p.id,
+        name: p.name,
+        slug: p.slug,
+        price: parseFloat(p.price),
+        mg: p.mg,
+        imageUrl: p.image_url,
+        category: p.category_name
+      }))
+    });
+
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /products/featured
  * Get featured products
  */
