@@ -52,9 +52,10 @@ router.get('/', async (req, res, next) => {
 
     const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-    const total = db.prepare(`SELECT COUNT(*) as count FROM orders ${whereClause}`).get(...params).count;
+    const totalResult = await db.prepare(`SELECT COUNT(*) as count FROM orders ${whereClause}`).get(...params);
+    const total = totalResult.count;
 
-    const orders = db.prepare(`
+    const orders = await db.prepare(`
       SELECT * FROM orders ${whereClause}
       ORDER BY ${sort} ${order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC'}
       LIMIT ? OFFSET ?
@@ -64,7 +65,7 @@ router.get('/', async (req, res, next) => {
     const orderIds = orders.map(o => o.id);
     let itemCounts = {};
     if (orderIds.length) {
-      const counts = db.prepare(`
+      const counts = await db.prepare(`
         SELECT order_id, SUM(quantity) as count FROM order_items
         WHERE order_id IN (${orderIds.map(() => '?').join(',')})
         GROUP BY order_id
@@ -112,12 +113,12 @@ router.get('/:id', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const order = db.prepare('SELECT * FROM orders WHERE id = ? OR order_number = ?').get(id, id);
+    const order = await db.prepare('SELECT * FROM orders WHERE id = ? OR order_number = ?').get(id, id);
     if (!order) throw new NotFoundError('Order not found');
 
-    const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id);
-    const history = db.prepare('SELECT * FROM order_status_history WHERE order_id = ? ORDER BY created_at DESC').all(order.id);
-    const transactions = db.prepare('SELECT * FROM payment_transactions WHERE order_id = ? ORDER BY created_at DESC').all(order.id);
+    const items = await db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id);
+    const history = await db.prepare('SELECT * FROM order_status_history WHERE order_id = ? ORDER BY created_at DESC').all(order.id);
+    const transactions = await db.prepare('SELECT * FROM payment_transactions WHERE order_id = ? ORDER BY created_at DESC').all(order.id);
 
     res.json({
       success: true,
@@ -171,15 +172,15 @@ router.put('/:id/status', async (req, res, next) => {
     const { status, notes } = req.body;
     const db = getDatabase();
 
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    const order = await db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
     if (!order) throw new NotFoundError('Order not found');
 
     const validStatuses = ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'on_hold'];
     if (!validStatuses.includes(status)) throw new ValidationError('Invalid status');
 
-    db.prepare('UPDATE orders SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run(status, id);
+    await db.prepare('UPDATE orders SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run(status, id);
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO order_status_history (id, order_id, previous_status, new_status, notes, changed_by)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(uuidv4(), id, order.status, status, notes || null, req.user.id);
@@ -203,22 +204,22 @@ router.put('/:id/ship', async (req, res, next) => {
     const { trackingNumber, carrier, notes } = req.body;
     const db = getDatabase();
 
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    const order = await db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
     if (!order) throw new NotFoundError('Order not found');
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE orders SET status = 'shipped', fulfillment_status = 'fulfilled',
         tracking_number = ?, shipping_carrier = ?, shipped_at = datetime('now'), updated_at = datetime('now')
       WHERE id = ?
     `).run(trackingNumber || null, carrier || null, id);
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO order_status_history (id, order_id, previous_status, new_status, notes, changed_by)
       VALUES (?, ?, ?, 'shipped', ?, ?)
     `).run(uuidv4(), id, order.status, notes || `Shipped via ${carrier || 'carrier'}`, req.user.id);
 
     // Update fulfilled quantity
-    db.prepare('UPDATE order_items SET fulfilled_quantity = quantity WHERE order_id = ?').run(id);
+    await db.prepare('UPDATE order_items SET fulfilled_quantity = quantity WHERE order_id = ?').run(id);
 
     // Send shipping notification
     await emailService.sendOrderShipped(order, trackingNumber, carrier);
@@ -242,7 +243,7 @@ router.post('/:id/refund', async (req, res, next) => {
     const { amount, reason, restockItems } = req.body;
     const db = getDatabase();
 
-    const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    const order = await db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
     if (!order) throw new NotFoundError('Order not found');
 
     if (order.payment_status !== 'paid') throw new ValidationError('Order has not been paid');
@@ -251,7 +252,7 @@ router.post('/:id/refund', async (req, res, next) => {
 
     // Process PayPal refund if applicable
     if (order.payment_provider === 'paypal' && order.payment_transaction_id) {
-      const transaction = db.prepare(`
+      const transaction = await db.prepare(`
         SELECT provider_transaction_id FROM payment_transactions
         WHERE order_id = ? AND type = 'capture' AND status = 'completed'
         ORDER BY created_at DESC LIMIT 1
@@ -264,29 +265,29 @@ router.post('/:id/refund', async (req, res, next) => {
 
     // Update order
     const newPaymentStatus = refundAmount >= order.grand_total ? 'refunded' : 'partially_refunded';
-    db.prepare(`
+    await db.prepare(`
       UPDATE orders SET payment_status = ?, status = 'refunded', updated_at = datetime('now')
       WHERE id = ?
     `).run(newPaymentStatus, id);
 
     // Record refund transaction
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO payment_transactions (id, order_id, provider, type, status, amount, currency)
       VALUES (?, ?, ?, 'refund', 'completed', ?, 'USD')
     `).run(uuidv4(), id, order.payment_provider || 'manual', refundAmount);
 
     // Restock items if requested
     if (restockItems) {
-      const items = db.prepare('SELECT product_id, variation_id, quantity FROM order_items WHERE order_id = ?').all(id);
+      const items = await db.prepare('SELECT product_id, variation_id, quantity FROM order_items WHERE order_id = ?').all(id);
       for (const item of items) {
-        db.prepare('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?').run(item.quantity, item.product_id);
+        await db.prepare('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?').run(item.quantity, item.product_id);
         if (item.variation_id) {
-          db.prepare('UPDATE product_variations SET stock_quantity = stock_quantity + ? WHERE id = ?').run(item.quantity, item.variation_id);
+          await db.prepare('UPDATE product_variations SET stock_quantity = stock_quantity + ? WHERE id = ?').run(item.quantity, item.variation_id);
         }
       }
     }
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO order_status_history (id, order_id, previous_status, new_status, notes, changed_by)
       VALUES (?, ?, ?, 'refunded', ?, ?)
     `).run(uuidv4(), id, order.status, `Refund of $${refundAmount.toFixed(2)}: ${reason || 'No reason provided'}`, req.user.id);
@@ -326,7 +327,7 @@ router.put('/:id/notes', async (req, res, next) => {
     if (fields.length) {
       fields.push('updated_at = datetime(\'now\')');
       values.push(id);
-      db.prepare(`UPDATE orders SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+      await db.prepare(`UPDATE orders SET ${fields.join(', ')} WHERE id = ?`).run(...values);
     }
 
     res.json({ success: true, message: 'Notes updated' });

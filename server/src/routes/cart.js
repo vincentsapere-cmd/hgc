@@ -14,15 +14,15 @@ const router = express.Router();
 /**
  * Get or create cart
  */
-const getOrCreateCart = (userId, sessionId, db) => {
+const getOrCreateCart = async (userId, sessionId, db) => {
   let cart;
 
   if (userId) {
-    cart = db.prepare(`
+    cart = await db.prepare(`
       SELECT * FROM carts WHERE user_id = ? AND status = 'active'
     `).get(userId);
   } else if (sessionId) {
-    cart = db.prepare(`
+    cart = await db.prepare(`
       SELECT * FROM carts WHERE session_id = ? AND status = 'active'
     `).get(sessionId);
   }
@@ -31,7 +31,7 @@ const getOrCreateCart = (userId, sessionId, db) => {
     const cartId = uuidv4();
     const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO carts (id, user_id, session_id, expires_at)
       VALUES (?, ?, ?, ?)
     `).run(cartId, userId || null, sessionId || null, expiresAt);
@@ -51,10 +51,10 @@ router.get('/', optionalAuth, async (req, res, next) => {
     const sessionId = req.cookies?.cartSession || req.headers['x-cart-session'];
     const db = getDatabase();
 
-    const cart = getOrCreateCart(req.user?.id, sessionId, db);
+    const cart = await getOrCreateCart(req.user?.id, sessionId, db);
 
     // Get cart items with product details
-    const items = db.prepare(`
+    const items = await db.prepare(`
       SELECT ci.id, ci.quantity,
         p.id as product_id, p.sku, p.name, p.price, p.mg, p.unit, p.image_url,
         p.stock_quantity, p.track_inventory, p.allow_backorder,
@@ -124,7 +124,7 @@ router.post('/items', optionalAuth, async (req, res, next) => {
     const db = getDatabase();
 
     // Validate product
-    const product = db.prepare(`
+    const product = await db.prepare(`
       SELECT id, name, stock_quantity, track_inventory, allow_backorder
       FROM products WHERE id = ? AND is_active = 1
     `).get(productId);
@@ -135,7 +135,7 @@ router.post('/items', optionalAuth, async (req, res, next) => {
 
     // Validate variation if provided
     if (variationId) {
-      const variation = db.prepare(`
+      const variation = await db.prepare(`
         SELECT id FROM product_variations WHERE id = ? AND product_id = ? AND is_active = 1
       `).get(variationId, productId);
 
@@ -149,10 +149,10 @@ router.post('/items', optionalAuth, async (req, res, next) => {
       throw new ValidationError(`Only ${product.stock_quantity} items available`);
     }
 
-    const cart = getOrCreateCart(req.user?.id, sessionId, db);
+    const cart = await getOrCreateCart(req.user?.id, sessionId, db);
 
     // Check if item already exists in cart
-    const existingItem = db.prepare(`
+    const existingItem = await db.prepare(`
       SELECT id, quantity FROM cart_items
       WHERE cart_id = ? AND product_id = ? AND (variation_id = ? OR (variation_id IS NULL AND ? IS NULL))
     `).get(cart.id, productId, variationId, variationId);
@@ -160,20 +160,20 @@ router.post('/items', optionalAuth, async (req, res, next) => {
     if (existingItem) {
       // Update quantity
       const newQuantity = existingItem.quantity + quantity;
-      db.prepare(`
+      await db.prepare(`
         UPDATE cart_items SET quantity = ?, updated_at = datetime('now')
         WHERE id = ?
       `).run(newQuantity, existingItem.id);
     } else {
       // Add new item
-      db.prepare(`
+      await db.prepare(`
         INSERT INTO cart_items (id, cart_id, product_id, variation_id, quantity)
         VALUES (?, ?, ?, ?, ?)
       `).run(uuidv4(), cart.id, productId, variationId || null, quantity);
     }
 
     // Update cart timestamp
-    db.prepare(`UPDATE carts SET updated_at = datetime('now') WHERE id = ?`).run(cart.id);
+    await db.prepare(`UPDATE carts SET updated_at = datetime('now') WHERE id = ?`).run(cart.id);
 
     // Set cart session cookie
     if (!req.cookies?.cartSession && !req.user) {
@@ -208,9 +208,9 @@ router.put('/items/:id', optionalAuth, async (req, res, next) => {
       throw new ValidationError('Quantity must be at least 1');
     }
 
-    const cart = getOrCreateCart(req.user?.id, sessionId, db);
+    const cart = await getOrCreateCart(req.user?.id, sessionId, db);
 
-    const item = db.prepare(`
+    const item = await db.prepare(`
       SELECT ci.*, p.stock_quantity, p.track_inventory, p.allow_backorder
       FROM cart_items ci
       JOIN products p ON ci.product_id = p.id
@@ -226,7 +226,7 @@ router.put('/items/:id', optionalAuth, async (req, res, next) => {
       throw new ValidationError(`Only ${item.stock_quantity} items available`);
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE cart_items SET quantity = ?, updated_at = datetime('now')
       WHERE id = ?
     `).run(quantity, id);
@@ -251,9 +251,9 @@ router.delete('/items/:id', optionalAuth, async (req, res, next) => {
     const sessionId = req.cookies?.cartSession || req.headers['x-cart-session'];
     const db = getDatabase();
 
-    const cart = getOrCreateCart(req.user?.id, sessionId, db);
+    const cart = await getOrCreateCart(req.user?.id, sessionId, db);
 
-    const result = db.prepare('DELETE FROM cart_items WHERE id = ? AND cart_id = ?').run(id, cart.id);
+    const result = await db.prepare('DELETE FROM cart_items WHERE id = ? AND cart_id = ?').run(id, cart.id);
 
     if (result.changes === 0) {
       throw new NotFoundError('Cart item not found');
@@ -278,9 +278,9 @@ router.delete('/', optionalAuth, async (req, res, next) => {
     const sessionId = req.cookies?.cartSession || req.headers['x-cart-session'];
     const db = getDatabase();
 
-    const cart = getOrCreateCart(req.user?.id, sessionId, db);
+    const cart = await getOrCreateCart(req.user?.id, sessionId, db);
 
-    db.prepare('DELETE FROM cart_items WHERE cart_id = ?').run(cart.id);
+    await db.prepare('DELETE FROM cart_items WHERE cart_id = ?').run(cart.id);
 
     res.json({
       success: true,
@@ -310,7 +310,7 @@ router.post('/merge', optionalAuth, async (req, res, next) => {
     const db = getDatabase();
 
     // Get guest cart
-    const guestCart = db.prepare(`
+    const guestCart = await db.prepare(`
       SELECT * FROM carts WHERE session_id = ? AND status = 'active' AND user_id IS NULL
     `).get(sessionId);
 
@@ -319,23 +319,23 @@ router.post('/merge', optionalAuth, async (req, res, next) => {
     }
 
     // Get or create user cart
-    const userCart = getOrCreateCart(req.user.id, null, db);
+    const userCart = await getOrCreateCart(req.user.id, null, db);
 
     // Get guest cart items
-    const guestItems = db.prepare('SELECT * FROM cart_items WHERE cart_id = ?').all(guestCart.id);
+    const guestItems = await db.prepare('SELECT * FROM cart_items WHERE cart_id = ?').all(guestCart.id);
 
     // Merge items
     for (const item of guestItems) {
-      const existingItem = db.prepare(`
+      const existingItem = await db.prepare(`
         SELECT id, quantity FROM cart_items
         WHERE cart_id = ? AND product_id = ? AND (variation_id = ? OR (variation_id IS NULL AND ? IS NULL))
       `).get(userCart.id, item.product_id, item.variation_id, item.variation_id);
 
       if (existingItem) {
-        db.prepare('UPDATE cart_items SET quantity = quantity + ? WHERE id = ?')
+        await db.prepare('UPDATE cart_items SET quantity = quantity + ? WHERE id = ?')
           .run(item.quantity, existingItem.id);
       } else {
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO cart_items (id, cart_id, product_id, variation_id, quantity)
           VALUES (?, ?, ?, ?, ?)
         `).run(uuidv4(), userCart.id, item.product_id, item.variation_id, item.quantity);
@@ -343,8 +343,8 @@ router.post('/merge', optionalAuth, async (req, res, next) => {
     }
 
     // Delete guest cart
-    db.prepare('DELETE FROM cart_items WHERE cart_id = ?').run(guestCart.id);
-    db.prepare('DELETE FROM carts WHERE id = ?').run(guestCart.id);
+    await db.prepare('DELETE FROM cart_items WHERE cart_id = ?').run(guestCart.id);
+    await db.prepare('DELETE FROM carts WHERE id = ?').run(guestCart.id);
 
     // Clear guest cart cookie
     res.clearCookie('cartSession');

@@ -43,9 +43,10 @@ router.get('/', async (req, res, next) => {
 
     const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-    const total = db.prepare(`SELECT COUNT(*) as count FROM users ${whereClause}`).get(...params).count;
+    const totalResult = await db.prepare(`SELECT COUNT(*) as count FROM users ${whereClause}`).get(...params);
+    const total = totalResult.count;
 
-    const users = db.prepare(`
+    const users = await db.prepare(`
       SELECT id, email, first_name, last_name, phone, role, status, email_verified,
         two_factor_enabled, last_login, created_at
       FROM users ${whereClause}
@@ -57,7 +58,7 @@ router.get('/', async (req, res, next) => {
     const userIds = users.map(u => u.id);
     let orderCounts = {};
     if (userIds.length) {
-      const counts = db.prepare(`
+      const counts = await db.prepare(`
         SELECT user_id, COUNT(*) as count, SUM(grand_total) as total_spent
         FROM orders WHERE user_id IN (${userIds.map(() => '?').join(',')}) AND payment_status = 'paid'
         GROUP BY user_id
@@ -99,7 +100,7 @@ router.get('/:id', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const user = db.prepare(`
+    const user = await db.prepare(`
       SELECT id, email, first_name, last_name, phone, role, status, email_verified,
         two_factor_enabled, last_login, login_attempts, locked_until, created_at, updated_at
       FROM users WHERE id = ?
@@ -107,12 +108,12 @@ router.get('/:id', async (req, res, next) => {
 
     if (!user) throw new NotFoundError('User not found');
 
-    const addresses = db.prepare('SELECT * FROM user_addresses WHERE user_id = ?').all(id);
-    const orders = db.prepare(`
+    const addresses = await db.prepare('SELECT * FROM user_addresses WHERE user_id = ?').all(id);
+    const orders = await db.prepare(`
       SELECT id, order_number, grand_total, status, created_at
       FROM orders WHERE user_id = ? ORDER BY created_at DESC LIMIT 10
     `).all(id);
-    const reviews = db.prepare(`
+    const reviews = await db.prepare(`
       SELECT r.*, p.name as product_name FROM product_reviews r
       JOIN products p ON r.product_id = p.id WHERE r.user_id = ?
     `).all(id);
@@ -165,7 +166,7 @@ router.post('/', requireSuperAdmin, async (req, res, next) => {
     const { email, password, firstName, lastName, role } = req.body;
     const db = getDatabase();
 
-    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase());
+    const existing = await db.prepare('SELECT id FROM users WHERE email = ?').get(email.toLowerCase());
     if (existing) throw new ConflictError('Email already exists');
 
     const validRoles = ['admin', 'manager'];
@@ -174,7 +175,7 @@ router.post('/', requireSuperAdmin, async (req, res, next) => {
     const passwordHash = await bcrypt.hash(password, config.security.bcryptRounds);
     const userId = uuidv4();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO users (id, email, password_hash, first_name, last_name, role, status, email_verified)
       VALUES (?, ?, ?, ?, ?, ?, 'active', 1)
     `).run(userId, email.toLowerCase(), passwordHash, firstName, lastName, role);
@@ -198,7 +199,7 @@ router.put('/:id/status', async (req, res, next) => {
     const { status, reason } = req.body;
     const db = getDatabase();
 
-    const user = db.prepare('SELECT email, role FROM users WHERE id = ?').get(id);
+    const user = await db.prepare('SELECT email, role FROM users WHERE id = ?').get(id);
     if (!user) throw new NotFoundError('User not found');
 
     // Cannot modify super_admin
@@ -209,10 +210,10 @@ router.put('/:id/status', async (req, res, next) => {
     const validStatuses = ['active', 'suspended'];
     if (!validStatuses.includes(status)) throw new ValidationError('Invalid status');
 
-    db.prepare('UPDATE users SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run(status, id);
+    await db.prepare('UPDATE users SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run(status, id);
 
     if (status === 'suspended') {
-      db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(id);
+      await db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(id);
       logSecurityEvent('user_suspended', { userId: id, reason, by: req.user.id });
     }
 
@@ -238,7 +239,7 @@ router.put('/:id/role', requireSuperAdmin, async (req, res, next) => {
     const validRoles = ['customer', 'manager', 'admin'];
     if (!validRoles.includes(role)) throw new ValidationError('Invalid role');
 
-    db.prepare('UPDATE users SET role = ?, updated_at = datetime(\'now\') WHERE id = ?').run(role, id);
+    await db.prepare('UPDATE users SET role = ?, updated_at = datetime(\'now\') WHERE id = ?').run(role, id);
 
     logAuditEvent(req.user.id, 'user_role_changed', 'user', id, { role }, req.ip);
 
@@ -259,12 +260,12 @@ router.post('/:id/reset-password', async (req, res, next) => {
     const { newPassword } = req.body;
     const db = getDatabase();
 
-    const user = db.prepare('SELECT email FROM users WHERE id = ?').get(id);
+    const user = await db.prepare('SELECT email FROM users WHERE id = ?').get(id);
     if (!user) throw new NotFoundError('User not found');
 
     const passwordHash = await bcrypt.hash(newPassword, config.security.bcryptRounds);
-    db.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?').run(passwordHash, id);
-    db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(id);
+    await db.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?').run(passwordHash, id);
+    await db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(id);
 
     logAuditEvent(req.user.id, 'user_password_reset', 'user', id, {}, req.ip);
     logSecurityEvent('admin_password_reset', { userId: id, by: req.user.id });

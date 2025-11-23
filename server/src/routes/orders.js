@@ -248,11 +248,11 @@ router.post('/', optionalAuth, createOrderValidation, async (req, res, next) => 
 
     // Update coupon usage
     if (couponCode) {
-      db.prepare('UPDATE coupons SET usage_count = usage_count + 1 WHERE code = ?').run(couponCode);
+      await db.prepare('UPDATE coupons SET usage_count = usage_count + 1 WHERE code = ?').run(couponCode);
     }
 
     // Log order creation
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO order_status_history (id, order_id, new_status, notes)
       VALUES (?, ?, 'pending', 'Order created')
     `).run(uuidv4(), orderId);

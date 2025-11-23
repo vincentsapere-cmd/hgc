@@ -3,10 +3,36 @@
  */
 
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { config } from '../config/index.js';
 import { getDatabase } from '../database/init.js';
 import { AuthenticationError, AuthorizationError } from './errorHandler.js';
 import { logger, logSecurityEvent } from '../utils/logger.js';
+
+/**
+ * Constant-time string comparison to prevent timing attacks
+ * @param {string} a - First string
+ * @param {string} b - Second string
+ * @returns {boolean} - True if strings are equal
+ */
+const safeCompare = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') {
+    return false;
+  }
+
+  // Ensure both strings are the same length for constant-time comparison
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+
+  if (bufA.length !== bufB.length) {
+    // Still do comparison to maintain constant time, but result will be false
+    const bufPadded = Buffer.alloc(bufA.length);
+    crypto.timingSafeEqual(bufA, bufPadded);
+    return false;
+  }
+
+  return crypto.timingSafeEqual(bufA, bufB);
+};
 
 /**
  * Verify JWT token and attach user to request
@@ -57,15 +83,28 @@ export const authenticate = async (req, res, next) => {
       throw new AuthenticationError('Account suspended');
     }
 
-    // Check if session is valid
+    // Check if session is valid - always validate for security
     const session = db.prepare(`
       SELECT id FROM user_sessions
       WHERE user_id = ? AND expires_at > datetime('now')
       ORDER BY created_at DESC LIMIT 1
     `).get(user.id);
 
-    if (!session && config.env === 'production') {
-      throw new AuthenticationError('Session expired');
+    if (!session) {
+      // Log the issue regardless of environment
+      logSecurityEvent('session_not_found', {
+        userId: user.id,
+        ip: req.ip,
+        environment: config.env
+      });
+
+      // In development, warn but allow (for easier testing)
+      // In production or any other mode, enforce session validation
+      if (config.env === 'development') {
+        logger.warn('Session validation bypassed in development mode', { userId: user.id });
+      } else {
+        throw new AuthenticationError('Session expired');
+      }
     }
 
     // Attach user to request
@@ -146,7 +185,7 @@ export const requireSuperAdmin = requireRole('super_admin');
 export const requireManager = requireRole('admin', 'super_admin', 'manager');
 
 /**
- * Verify CSRF token
+ * Verify CSRF token using constant-time comparison
  */
 export const verifyCsrf = (req, res, next) => {
   // Skip for GET, HEAD, OPTIONS
@@ -157,11 +196,24 @@ export const verifyCsrf = (req, res, next) => {
   const csrfToken = req.headers['x-csrf-token'] || req.body._csrf;
   const storedToken = req.cookies?.csrfToken;
 
-  if (!csrfToken || !storedToken || csrfToken !== storedToken) {
+  // Validate both tokens exist and are strings
+  if (!csrfToken || !storedToken) {
     logSecurityEvent('csrf_validation_failed', {
       ip: req.ip,
       path: req.path,
-      method: req.method
+      method: req.method,
+      reason: 'missing_token'
+    });
+    return next(new AuthorizationError('CSRF token validation failed'));
+  }
+
+  // Use constant-time comparison to prevent timing attacks
+  if (!safeCompare(csrfToken, storedToken)) {
+    logSecurityEvent('csrf_validation_failed', {
+      ip: req.ip,
+      path: req.path,
+      method: req.method,
+      reason: 'token_mismatch'
     });
     return next(new AuthorizationError('CSRF token validation failed'));
   }

@@ -101,7 +101,7 @@ router.put('/profile', async (req, res, next) => {
     const { firstName, lastName, phone } = req.body;
     const db = getDatabase();
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE users SET first_name = ?, last_name = ?, phone = ?, updated_at = datetime('now')
       WHERE id = ?
     `).run(firstName, lastName, phone || null, req.user.id);
@@ -125,7 +125,7 @@ router.put('/password', async (req, res, next) => {
     const { currentPassword, newPassword } = req.body;
     const db = getDatabase();
 
-    const user = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
+    const user = await db.prepare('SELECT password_hash FROM users WHERE id = ?').get(req.user.id);
 
     const validPassword = await bcrypt.compare(currentPassword, user.password_hash);
     if (!validPassword) {
@@ -139,7 +139,7 @@ router.put('/password', async (req, res, next) => {
     }
 
     const newHash = await bcrypt.hash(newPassword, config.security.bcryptRounds);
-    db.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    await db.prepare('UPDATE users SET password_hash = ?, updated_at = datetime(\'now\') WHERE id = ?')
       .run(newHash, req.user.id);
 
     res.json({
@@ -160,7 +160,7 @@ router.get('/addresses', async (req, res, next) => {
   try {
     const db = getDatabase();
 
-    const addresses = db.prepare(`
+    const addresses = await db.prepare(`
       SELECT * FROM user_addresses WHERE user_id = ? ORDER BY is_default DESC, created_at DESC
     `).all(req.user.id);
 
@@ -204,10 +204,10 @@ router.post('/addresses', addressValidation, async (req, res, next) => {
 
     // If this is default, unset other defaults
     if (isDefault) {
-      db.prepare('UPDATE user_addresses SET is_default = 0 WHERE user_id = ?').run(req.user.id);
+      await db.prepare('UPDATE user_addresses SET is_default = 0 WHERE user_id = ?').run(req.user.id);
     }
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO user_addresses (id, user_id, label, first_name, last_name, street_address,
         street_address_2, city, state, zip_code, country, phone, is_default, is_billing)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -242,7 +242,7 @@ router.put('/addresses/:id', addressValidation, async (req, res, next) => {
     const db = getDatabase();
 
     // Verify ownership
-    const address = db.prepare('SELECT id FROM user_addresses WHERE id = ? AND user_id = ?')
+    const address = await db.prepare('SELECT id FROM user_addresses WHERE id = ? AND user_id = ?')
       .get(id, req.user.id);
 
     if (!address) {
@@ -251,10 +251,10 @@ router.put('/addresses/:id', addressValidation, async (req, res, next) => {
 
     // If this is default, unset other defaults
     if (isDefault) {
-      db.prepare('UPDATE user_addresses SET is_default = 0 WHERE user_id = ?').run(req.user.id);
+      await db.prepare('UPDATE user_addresses SET is_default = 0 WHERE user_id = ?').run(req.user.id);
     }
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE user_addresses SET
         label = ?, first_name = ?, last_name = ?, street_address = ?, street_address_2 = ?,
         city = ?, state = ?, zip_code = ?, country = ?, phone = ?, is_default = ?, is_billing = ?,
@@ -285,7 +285,7 @@ router.delete('/addresses/:id', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const result = db.prepare('DELETE FROM user_addresses WHERE id = ? AND user_id = ?')
+    const result = await db.prepare('DELETE FROM user_addresses WHERE id = ? AND user_id = ?')
       .run(id, req.user.id);
 
     if (result.changes === 0) {
@@ -310,7 +310,7 @@ router.get('/wishlist', async (req, res, next) => {
   try {
     const db = getDatabase();
 
-    const items = db.prepare(`
+    const items = await db.prepare(`
       SELECT w.id, w.created_at,
         p.id as product_id, p.name, p.slug, p.price, p.compare_at_price,
         p.image_url, p.mg, p.stock_quantity, p.track_inventory
@@ -351,13 +351,13 @@ router.post('/wishlist', async (req, res, next) => {
     const db = getDatabase();
 
     // Verify product exists
-    const product = db.prepare('SELECT id FROM products WHERE id = ? AND is_active = 1').get(productId);
+    const product = await db.prepare('SELECT id FROM products WHERE id = ? AND is_active = 1').get(productId);
     if (!product) {
       throw new NotFoundError('Product not found');
     }
 
     // Check if already in wishlist
-    const existing = db.prepare('SELECT id FROM wishlists WHERE user_id = ? AND product_id = ?')
+    const existing = await db.prepare('SELECT id FROM wishlists WHERE user_id = ? AND product_id = ?')
       .get(req.user.id, productId);
 
     if (existing) {
@@ -365,7 +365,7 @@ router.post('/wishlist', async (req, res, next) => {
     }
 
     const wishlistId = uuidv4();
-    db.prepare('INSERT INTO wishlists (id, user_id, product_id) VALUES (?, ?, ?)')
+    await db.prepare('INSERT INTO wishlists (id, user_id, product_id) VALUES (?, ?, ?)')
       .run(wishlistId, req.user.id, productId);
 
     res.status(201).json({
@@ -388,7 +388,7 @@ router.delete('/wishlist/:productId', async (req, res, next) => {
     const { productId } = req.params;
     const db = getDatabase();
 
-    const result = db.prepare('DELETE FROM wishlists WHERE user_id = ? AND product_id = ?')
+    const result = await db.prepare('DELETE FROM wishlists WHERE user_id = ? AND product_id = ?')
       .run(req.user.id, productId);
 
     if (result.changes === 0) {
@@ -415,13 +415,13 @@ router.post('/reviews', reviewValidation, async (req, res, next) => {
     const db = getDatabase();
 
     // Verify product exists
-    const product = db.prepare('SELECT id FROM products WHERE id = ? AND is_active = 1').get(productId);
+    const product = await db.prepare('SELECT id FROM products WHERE id = ? AND is_active = 1').get(productId);
     if (!product) {
       throw new NotFoundError('Product not found');
     }
 
     // Check if user already reviewed
-    const existing = db.prepare('SELECT id FROM product_reviews WHERE user_id = ? AND product_id = ?')
+    const existing = await db.prepare('SELECT id FROM product_reviews WHERE user_id = ? AND product_id = ?')
       .get(req.user.id, productId);
 
     if (existing) {
@@ -429,7 +429,7 @@ router.post('/reviews', reviewValidation, async (req, res, next) => {
     }
 
     // Check if verified purchase
-    const purchase = db.prepare(`
+    const purchase = await db.prepare(`
       SELECT o.id FROM orders o
       JOIN order_items oi ON o.id = oi.order_id
       WHERE o.user_id = ? AND oi.product_id = ? AND o.status IN ('confirmed', 'shipped', 'delivered')
@@ -437,7 +437,7 @@ router.post('/reviews', reviewValidation, async (req, res, next) => {
     `).get(req.user.id, productId);
 
     const reviewId = uuidv4();
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO product_reviews (id, product_id, user_id, order_id, rating, title, content, is_verified_purchase, is_approved)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
     `).run(reviewId, productId, req.user.id, purchase?.id || null, rating, title || null, content || null, purchase ? 1 : 0);
@@ -461,16 +461,17 @@ router.get('/notifications', async (req, res, next) => {
   try {
     const db = getDatabase();
 
-    const notifications = db.prepare(`
+    const notifications = await db.prepare(`
       SELECT * FROM notifications
       WHERE user_id = ?
       ORDER BY created_at DESC
       LIMIT 50
     `).all(req.user.id);
 
-    const unreadCount = db.prepare(`
+    const unreadResult = await db.prepare(`
       SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0
-    `).get(req.user.id).count;
+    `).get(req.user.id);
+    const unreadCount = unreadResult.count;
 
     res.json({
       success: true,
@@ -502,7 +503,7 @@ router.put('/notifications/:id/read', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE notifications SET is_read = 1, read_at = datetime('now')
       WHERE id = ? AND user_id = ?
     `).run(id, req.user.id);
@@ -522,7 +523,7 @@ router.put('/notifications/read-all', async (req, res, next) => {
   try {
     const db = getDatabase();
 
-    db.prepare(`
+    await db.prepare(`
       UPDATE notifications SET is_read = 1, read_at = datetime('now')
       WHERE user_id = ? AND is_read = 0
     `).run(req.user.id);

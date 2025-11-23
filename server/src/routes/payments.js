@@ -56,7 +56,7 @@ router.post('/paypal/create-order', optionalAuth, async (req, res, next) => {
     }
 
     // Get order items
-    const items = db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
+    const items = await db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(orderId);
 
     // Create PayPal order
     const paypalOrder = await paypalService.createOrder({
@@ -121,13 +121,13 @@ router.post('/paypal/capture', optionalAuth, paypalCaptureValidation, async (req
     // Get our internal order
     let order;
     if (internalOrderId) {
-      order = db.prepare('SELECT * FROM orders WHERE id = ?').get(internalOrderId);
+      order = await db.prepare('SELECT * FROM orders WHERE id = ?').get(internalOrderId);
     } else {
       // Try to find by PayPal order ID in custom_id
       const paypalOrderDetails = await paypalService.getOrder(paypalOrderId);
       const customId = paypalOrderDetails.purchase_units?.[0]?.custom_id;
       if (customId) {
-        order = db.prepare('SELECT * FROM orders WHERE id = ?').get(customId);
+        order = await db.prepare('SELECT * FROM orders WHERE id = ?').get(customId);
       }
     }
 
@@ -162,17 +162,17 @@ router.post('/paypal/capture', optionalAuth, paypalCaptureValidation, async (req
 
     // Deduct gift card balance if used
     if (order.gift_card_code && order.gift_card_amount > 0) {
-      const giftCard = db.prepare('SELECT * FROM gift_cards WHERE code = ?').get(order.gift_card_code);
+      const giftCard = await db.prepare('SELECT * FROM gift_cards WHERE code = ?').get(order.gift_card_code);
       if (giftCard) {
         const newBalance = giftCard.current_balance - order.gift_card_amount;
         const newStatus = newBalance <= 0 ? 'depleted' : 'active';
 
-        db.prepare(`
+        await db.prepare(`
           UPDATE gift_cards SET current_balance = ?, status = ?, last_used_at = datetime('now')
           WHERE id = ?
         `).run(Math.max(0, newBalance), newStatus, giftCard.id);
 
-        db.prepare(`
+        await db.prepare(`
           INSERT INTO gift_card_transactions (id, gift_card_id, order_id, type, amount, balance_before, balance_after)
           VALUES (?, ?, ?, 'redemption', ?, ?, ?)
         `).run(uuidv4(), giftCard.id, order.id, order.gift_card_amount, giftCard.current_balance, newBalance);
@@ -221,13 +221,13 @@ router.post('/paypal/capture', optionalAuth, paypalCaptureValidation, async (req
     }
 
     // Log status change
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO order_status_history (id, order_id, previous_status, new_status, notes)
       VALUES (?, ?, 'pending', 'confirmed', 'Payment captured via PayPal')
     `).run(uuidv4(), order.id);
 
     // Get full order for email
-    const fullOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(order.id);
+    const fullOrder = await db.prepare('SELECT * FROM orders WHERE id = ?').get(order.id);
     fullOrder.items = orderItems;
 
     // Send confirmation emails

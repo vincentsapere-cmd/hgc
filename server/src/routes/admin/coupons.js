@@ -39,9 +39,10 @@ router.get('/', async (req, res, next) => {
 
     const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-    const total = db.prepare(`SELECT COUNT(*) as count FROM coupons ${whereClause}`).get(...params).count;
+    const totalResult = await db.prepare(`SELECT COUNT(*) as count FROM coupons ${whereClause}`).get(...params);
+    const total = totalResult.count;
 
-    const coupons = db.prepare(`
+    const coupons = await db.prepare(`
       SELECT * FROM coupons ${whereClause}
       ORDER BY created_at DESC LIMIT ? OFFSET ?
     `).all(...params, limit, offset);
@@ -85,12 +86,12 @@ router.post('/', createCouponValidation, async (req, res, next) => {
     } = req.body;
     const db = getDatabase();
 
-    const existing = db.prepare('SELECT id FROM coupons WHERE code = ?').get(code.toUpperCase());
+    const existing = await db.prepare('SELECT id FROM coupons WHERE code = ?').get(code.toUpperCase());
     if (existing) throw new ConflictError('Coupon code already exists');
 
     const couponId = uuidv4();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO coupons (id, code, description, type, value, minimum_order_amount, maximum_discount,
         usage_limit, per_user_limit, applicable_products, applicable_categories, excluded_products,
         starts_at, expires_at, created_by)
@@ -122,7 +123,7 @@ router.put('/:id', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const existing = db.prepare('SELECT * FROM coupons WHERE id = ?').get(id);
+    const existing = await db.prepare('SELECT * FROM coupons WHERE id = ?').get(id);
     if (!existing) throw new NotFoundError('Coupon not found');
 
     const updates = req.body;
@@ -146,7 +147,7 @@ router.put('/:id', async (req, res, next) => {
     if (fields.length) {
       fields.push('updated_at = datetime(\'now\')');
       values.push(id);
-      db.prepare(`UPDATE coupons SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+      await db.prepare(`UPDATE coupons SET ${fields.join(', ')} WHERE id = ?`).run(...values);
     }
 
     logAuditEvent(req.user.id, 'coupon_updated', 'coupon', id, updates, req.ip);
@@ -167,7 +168,7 @@ router.delete('/:id', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const result = db.prepare('DELETE FROM coupons WHERE id = ?').run(id);
+    const result = await db.prepare('DELETE FROM coupons WHERE id = ?').run(id);
     if (result.changes === 0) throw new NotFoundError('Coupon not found');
 
     logAuditEvent(req.user.id, 'coupon_deleted', 'coupon', id, {}, req.ip);
@@ -188,7 +189,7 @@ router.get('/:id/usage', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const usages = db.prepare(`
+    const usages = await db.prepare(`
       SELECT cu.*, o.order_number, u.email, u.first_name, u.last_name
       FROM coupon_usages cu
       JOIN orders o ON cu.order_id = o.id

@@ -46,9 +46,10 @@ router.get('/', async (req, res, next) => {
 
     const whereClause = whereConditions.length ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-    const total = db.prepare(`SELECT COUNT(*) as count FROM gift_cards ${whereClause}`).get(...params).count;
+    const totalResult = await db.prepare(`SELECT COUNT(*) as count FROM gift_cards ${whereClause}`).get(...params);
+    const total = totalResult.count;
 
-    const giftCards = db.prepare(`
+    const giftCards = await db.prepare(`
       SELECT * FROM gift_cards ${whereClause}
       ORDER BY created_at DESC LIMIT ? OFFSET ?
     `).all(...params, limit, offset);
@@ -88,13 +89,13 @@ router.post('/', createGiftCardValidation, async (req, res, next) => {
     const giftCardId = uuidv4();
     const code = generateGiftCardCode();
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO gift_cards (id, code, initial_balance, current_balance, recipient_email, recipient_name, personal_message, expires_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(giftCardId, code, initialBalance, initialBalance, recipientEmail || null, recipientName || null, personalMessage || null, expiresAt || null);
 
     // Record transaction
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO gift_card_transactions (id, gift_card_id, type, amount, balance_before, balance_after, created_by)
       VALUES (?, ?, 'purchase', ?, 0, ?, ?)
     `).run(uuidv4(), giftCardId, initialBalance, initialBalance, req.user.id);
@@ -132,10 +133,10 @@ router.get('/:id', async (req, res, next) => {
     const { id } = req.params;
     const db = getDatabase();
 
-    const giftCard = db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
+    const giftCard = await db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
     if (!giftCard) throw new NotFoundError('Gift card not found');
 
-    const transactions = db.prepare(`
+    const transactions = await db.prepare(`
       SELECT gt.*, o.order_number, u.email as user_email
       FROM gift_card_transactions gt
       LEFT JOIN orders o ON gt.order_id = o.id
@@ -180,10 +181,10 @@ router.put('/:id/status', async (req, res, next) => {
     const validStatuses = ['active', 'disabled'];
     if (!validStatuses.includes(status)) throw new ValidationError('Invalid status');
 
-    const giftCard = db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
+    const giftCard = await db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
     if (!giftCard) throw new NotFoundError('Gift card not found');
 
-    db.prepare('UPDATE gift_cards SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run(status, id);
+    await db.prepare('UPDATE gift_cards SET status = ?, updated_at = datetime(\'now\') WHERE id = ?').run(status, id);
 
     logAuditEvent(req.user.id, 'gift_card_status_changed', 'gift_card', id, { status, reason }, req.ip);
 
@@ -204,7 +205,7 @@ router.post('/:id/adjust', async (req, res, next) => {
     const { adjustment, reason } = req.body;
     const db = getDatabase();
 
-    const giftCard = db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
+    const giftCard = await db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
     if (!giftCard) throw new NotFoundError('Gift card not found');
 
     const newBalance = giftCard.current_balance + adjustment;
@@ -212,10 +213,10 @@ router.post('/:id/adjust', async (req, res, next) => {
 
     const newStatus = newBalance <= 0 ? 'depleted' : 'active';
 
-    db.prepare('UPDATE gift_cards SET current_balance = ?, status = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    await db.prepare('UPDATE gift_cards SET current_balance = ?, status = ?, updated_at = datetime(\'now\') WHERE id = ?')
       .run(newBalance, newStatus, id);
 
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO gift_card_transactions (id, gift_card_id, type, amount, balance_before, balance_after, notes, created_by)
       VALUES (?, ?, 'adjustment', ?, ?, ?, ?, ?)
     `).run(uuidv4(), id, adjustment, giftCard.current_balance, newBalance, reason || null, req.user.id);
@@ -243,7 +244,7 @@ router.post('/:id/resend', async (req, res, next) => {
     const { email } = req.body;
     const db = getDatabase();
 
-    const giftCard = db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
+    const giftCard = await db.prepare('SELECT * FROM gift_cards WHERE id = ?').get(id);
     if (!giftCard) throw new NotFoundError('Gift card not found');
 
     const recipientEmail = email || giftCard.recipient_email;
